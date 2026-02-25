@@ -1,0 +1,357 @@
+---
+title: "ANNs testing"
+output: html_notebook
+---
+
+### Adjustment of artificial neural networks (ANNs) for the prediction of productivity of forwarders working in the Northeast of Corrientes
+#### Author: Leszczuk Andrés
+
+#### libraries
+```{r warning=FALSE}
+library(readxl)     #Read excel file
+library(dplyr)      #Data analysis
+library(neuralnet)  #fit neural net
+library(relaimpo)   #Relative importance in Neural Net
+library(sigmoid)    #For Relu function
+library(ggplot2)
+```
+#### Data
+```{r warning=FALSE}
+# Import data
+data <- data <- read_excel("path/0-data/bd_clean.xlsx")
+
+# Select variables
+data <- data[,c("Vol_i", "VOL_TOT", "PEF", "DE")]
+
+# Filter out rows with NA values in any of the selected variables
+data <- data %>% filter(!is.na(Vol_i) & 
+                        !is.na(VOL_TOT) & 
+                        !is.na(DE) &
+                        !is.na(PEF))
+```
+
+#### Show data structure
+```{r}
+str(data)
+```
+
+#### Scaling of values to reduce variations between variables and improve the fitting performance of neural networks
+```{r}
+maxs <- apply(data, 2, max)
+mins <- apply(data, 2, min)
+scaled <- as.data.frame(scale(data, center = mins, scale = maxs - mins))
+summary(scaled)
+```
+`#### Data sampling 
+We separated the data into two random data sets, 70% for train (n = 295) and 30% for test data (n = 126 data).
+```{r}
+set.seed(1) # fit a seed 
+indice <- sample(1:nrow(data), round(0.7*nrow(data)))
+
+
+train <- data[indice,] # train data 
+test <- data[-indice,] # test data
+
+train_summary <- train %>% summarise(N = n(),
+                    mean_DE = mean(DE, na.rm = T),
+                    sd_DE   = sd(DE, na.rm = T),
+                    min_DE = min(DE, na.rm = T),
+                    max_DE = max(DE, na.rm = T),
+                    
+                    mean_Vol_i = mean(Vol_i, na.rm = T),
+                    sd_Vol_i   = sd(Vol_i, na.rm = T),
+                    min_Vol_i = min(Vol_i, na.rm = T),
+                    max_Vol_i = max(Vol_i, na.rm = T),
+                    
+                    mean_VOL_TOT = mean(VOL_TOT, na.rm = T),
+                    sd_VOL_TOT   = sd(VOL_TOT, na.rm = T),
+                    min_VOL_TOT = min(VOL_TOT, na.rm = T),
+                    max_VOL_TOT = max(VOL_TOT, na.rm = T))
+
+
+test_summary <- test %>% summarise(N = n(),
+                    mean_DE = mean(DE, na.rm = T),
+                    sd_DE   = sd(DE, na.rm = T),
+                    min_DE = min(DE, na.rm = T),
+                    max_DE = max(DE, na.rm = T),
+                    
+                    mean_Vol_i = mean(Vol_i, na.rm = T),
+                    sd_Vol_i   = sd(Vol_i, na.rm = T),
+                    min_Vol_i = min(Vol_i, na.rm = T),
+                    max_Vol_i = max(Vol_i, na.rm = T),
+                    
+                    mean_VOL_TOT = mean(VOL_TOT, na.rm = T),
+                    sd_VOL_TOT   = sd(VOL_TOT, na.rm = T),
+                    min_VOL_TOT = min(VOL_TOT, na.rm = T),
+                    max_VOL_TOT = max(VOL_TOT, na.rm = T))
+
+train_summary
+test_summary
+
+
+```
+
+
+####` Scaled Data sampling 
+We separated the data into two random data sets, 70% for train (n = 295) and 30% for test data (n = 126 data).
+```{r}
+set.seed(1) # fit a seed 
+indice <- sample(1:nrow(data), round(0.7*nrow(data)))
+test <- data[-indice,]
+
+train_ <- scaled[indice,] # train data 
+test_ <- scaled[-indice,] # test data
+```
+#### fitting of several artificial neural networks
+After the tests used in the previous script, we fit the neural network that showed the best result in terms of coefficient of variation, RMSE and R² fit.
+
+```{r}
+
+#RELU <- function(x) relu(x)
+#softplus <- function(x) log(1 + exp(x))
+
+n <- neuralnet(PEF~Vol_i+VOL_TOT+DE,
+                 data = train_,
+                 threshold = 0.001,
+                 act.fct = "logistic",
+                 linear.output = T,
+                 hidden = c(6,6,4),
+                 stepmax = 1000000)
+```
+#### We plot the neural network diagram
+```{r}
+plot(n,rep = 1)
+```
+#### Test the neural net
+we test the neural network from the test data 
+With the test and train data 
+```{r}
+# with test data
+
+pr.nn <- compute(n, test_) # This takes the test data and predicts the productivity of the forwarder.
+#pr.nn$net.result           # The values are scaled
+# are transformed to productivity values 
+pr.nn_ <- pr.nn$net.result*(max(data$PEF)-min(data$PEF))+min(data$PEF)
+test.r <- (test_$PEF)*(max(data$PEF)-min(data$PEF))+min(data$PEF)
+MSE.nn <-sum((test.r - pr.nn_)^2)/nrow(test_)
+
+summary(pr.nn_)
+
+print(paste('RMSE',MSE.nn))
+print(paste('cor',cor(test.r,pr.nn$net.result)))
+```
+With train data
+```{r}
+# with train
+
+pr.nn.train <- compute(n, train_) # This takes the test data and predicts the productivity of the forwarder.
+#pr.nn$net.result           # The values are scaled
+# are transformed to productivity values 
+pr.nn_.train <- pr.nn.train$net.result*(max(data$PEF)-min(data$PEF))+min(data$PEF)
+test.r.train <- (train_$PEF)*(max(data$PEF)-min(data$PEF))+min(data$PEF)
+MSE.nn_train <-sum((test.r.train - pr.nn_.train)^2)/nrow(train_)
+
+summary(pr.nn_.train)
+
+print(paste('RMSE',MSE.nn_train))
+print(paste('cor',cor(test.r.train,pr.nn.train$net.result)))
+```
+
+#### Predicted vs. observed productivity plot
+```{r, warning=FALSE}
+db <- data.frame(pr.nn_, data[-indice,3])
+db$dummy <- "dummy"
+db$id <- 1:dim(db)[1]
+colnames(db) <- c("fitted", "observed", "dummy","id")
+
+summary(lm(observed~fitted, db))
+
+library(ggplot2)
+
+theme_crojfe <- function(base_size = 10, base_family = "Tahoma") {
+  theme_classic(base_size = base_size, base_family = base_family) +
+    theme(
+      panel.border = element_rect(color = "#4D4D4D", fill = NA, linewidth = 0.4),
+      axis.line = element_line(color = "#4D4D4D", linewidth = 0.4),
+      axis.ticks = element_line(color = "#4D4D4D", linewidth = 0.4),
+      
+      # grid for CROJFE
+      panel.grid.major = element_line(color = "#B3B3B3", linewidth = 0.35),
+      panel.grid.minor = element_blank(),
+      
+      legend.position = "none",
+      
+      plot.title = element_text(hjust = 0.5, size = base_size),
+      axis.title = element_text(size = base_size),
+      axis.text  = element_text(size = base_size)
+    )
+}
+
+
+# Gráfico de dispersión comparando valores reales y predichos
+plot1_nn <- ggplot(db, aes(y = observed, x = fitted)) +
+  geom_point(shape = 21, fill = "#CFCFCF", color = "#4D4D4D", size = 2, stroke = 0.3) +
+  geom_smooth(method = "lm", formula = y ~ x, color = "#4D4D4D", linewidth = 0.6, se = FALSE) +
+  geom_abline(intercept = 0, slope = 1, color = "black", linewidth = 0.5) +
+  labs(
+    x = expression("Predicted productivity, m"^3*" h"^{-1}),
+    y = expression("Observed productivity, m"^3*" h"^{-1})
+  ) +
+  scale_x_continuous(breaks = seq(0, 120, 20), limits = c(0, 120)) +
+  scale_y_continuous(breaks = seq(0, 120, 20), limits = c(0, 120)) +
+  #coord_equal() +
+  theme_crojfe(base_size = 8, base_family = "Tahoma")
+
+
+lm_eq <- lm(observed ~ fitted, data = db)
+
+eq <- bquote(italic(y) == .(round(coef(lm_eq)[1], 2)) + .(round(coef(lm_eq)[2], 2)) %.% italic(x))
+r_squared <- bquote(R^2 == .(round(summary(lm_eq)$r.squared, 2)))
+sample_size <- bquote(italic(n) == .(nrow(test)))
+
+plot_with_eq <- plot1_nn +
+  annotate("text", x = 50, y = 25, label = as.expression(eq), family = "Tahoma", size = 2.5, hjust = 0) +
+  annotate("text", x = 50, y = 17, label = as.expression(r_squared), family = "Tahoma", size = 2.5, hjust = 0) +
+  annotate("text", x = 50, y = 9,  label = as.expression(sample_size), family = "Tahoma", size = 2.5, hjust = 0)
+
+
+# Mostrar el gráfico con la ecuación, R² y el valor de 'n'
+print(plot_with_eq)
+```
+# Residual plot 
+```{r}
+residuos <- db$observed - db$fitted
+
+plot2 <- ggplot(data.frame(residuos), aes(x = residuos)) +
+  geom_density(fill = "#CFCFCF", color = "black", linewidth = 0.5) +
+  labs(
+    x = "Residuals",
+    y = "Density"
+  ) +
+  theme_crojfe(base_size = 8, base_family = "Tahoma")
+residuos_df <- data.frame(PEF_observed = test$PEF, Residuos = residuos)
+
+```
+
+Grafico de residuos
+```{r}
+
+residuos_df <- data.frame(PEF_observed = test$PEF, Residuos = residuos)
+
+plot3 <- ggplot(residuos_df, aes(x = PEF_observed, y = Residuos)) +
+  geom_point(shape = 21, fill = "#CFCFCF", color = "#4D4D4D", size = 2, stroke = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.5) +
+  labs(
+    x = expression("Observed Productivity, m"^3*" h"^{-1}),
+    y = "Residuals"
+  ) +
+  theme_crojfe(base_size = 8, base_family = "Tahoma")
+
+```
+
+```{r, warning=FALSE}
+library(ggpubr)
+PLOT_NN <- ggarrange(
+  plot_with_eq, plot2, plot3,
+  labels = c("A", "B", "C"),
+  font.label = list(size = 8, face = "bold", family = "Tahoma"),
+  ncol = 3,
+  widths = c(1, 1, 1),   # <- fuerza mismo ancho
+  align = "hv"
+)
+PLOT_NN
+ggsave("Fig4.png",PLOT_NN, width = 18, height = 9, units = "cm", dpi = 600)
+```
+
+
+# Grafico con todos los datos para predichos vs observados e histograma 
+```{r}
+scaled <- scaled[,-5]
+scaled
+
+prueba.nn <- compute(n, scaled)
+prueba.nn.pef <- prueba.nn$net.result*(max(data$PEF)-min(data$PEF))+min(data$PEF)
+
+db_ <- data.frame(prueba.nn.pef, data[,3])
+db_$dummy <- "dummy"
+db_$id <- 1:dim(db_)[1]
+colnames(db_) <- c("fitted", "observed", "dummy","id")
+
+# filer outliers
+
+#db_ <- filter(db_, id !=115)
+#db_ <- filter(db_, id !=95)
+#db_ <- filter(db_, id !=253)
+#db_ <- filter(db_, id !=116)
+#db_ <- filter(db_, id !=244)
+#db_ <- filter(db_, id !=254)
+#db_ <- filter(db_, id !=270)
+#db_ <- filter(db_, id !=6)
+#db_ <- filter(db_, id !=416)
+#db_ <- filter(db_, id !=407)
+#db_ <- filter(db_, id !=388)
+#db_ <- filter(db_, id !=240)
+#db_ <- filter(db_, id !=200)
+#db_ <- filter(db_, id !=357)
+
+summary(lm(fitted~observed, db_))
+
+p6 <- ggplot(db_ , aes(fitted, observed,  color = dummy, label = id))+
+  geom_point(shape = 21, fill = "lightgray", size = 3.5)+
+  geom_smooth(method = "lm", formula = y~x, se = F)+
+  geom_abline(intercept = 0, slope = 1)+
+  #geom_text()+
+  theme(panel.grid.major = element_line(colour = "black"),
+        panel.border = element_rect(linetype = 1, fill = NA),
+        panel.background = element_rect(fill = "white"),
+        legend.position = c(.95, .25),
+        legend.justification = c("right", "top"),
+        legend.box.just = "right",
+        legend.margin = margin(6, 6, 6, 6),
+        text = element_text(size = 12))+
+  scale_fill_manual(values = c('#757474'))+
+  scale_colour_manual(values = c('#757474'))+
+  annotate(geom = "text", x = 35, y = 110, label = "R² = 0.84")+
+  expand_limits(x=c(10,50),y=c(10,50))+
+  scale_x_continuous(breaks = seq(0,120,10))+
+  scale_y_continuous(breaks = seq(0,120,10))+
+  xlab("Effective productivity fitted , m³/h")+
+  ylab("Effective productivity observed, m³/h")+
+  theme(legend.position = "none")
+p6
+```
+#### Residual plot
+```{r}
+
+mod <- lm(observed~fitted, db_)
+residuals(mod)
+standard_res <- rstandard(mod)
+
+db_$residuals <- standard_res
+
+p4 <- ggplot(db_, aes(residuals))+
+  xlab("Residuals, m³/h")+
+  ylab("Frecuency of residuals")+
+  theme(panel.grid.major = element_line(colour = "black"),
+        panel.border = element_rect(linetype = 1, fill = NA),
+        panel.background = element_rect(fill = "white"),
+        legend.position = c(.95, .25),
+        legend.justification = c("right", "top"),
+        legend.box.just = "right",
+        legend.margin = margin(6, 6, 6, 6),
+        text = element_text(size = 12))+
+  scale_fill_manual(values = c('#757474'))+
+  scale_colour_manual(values = c('#757474'))+
+  theme(legend.position = "none")+
+  geom_histogram(bins = 25)
+  
+p4
+```
+```{r}
+# unificate 2 plots in one
+library(ggpubr)
+p64 <- ggarrange(p6,p4,
+                 labels = c("C", "D"),
+                 ncol = 2)
+p64
+```
