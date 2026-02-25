@@ -1,0 +1,380 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Librerias
+```{r}
+#install.packages("DiagrammeR")
+#install.packages("xgboost")
+#install.packages("cvTools")
+
+library(xgboost)
+library(readxl)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(DiagrammeR)
+library(cvTools)
+library(tidyr)
+library(purrr)
+library(ggpubr)
+
+```
+
+# Datos 
+```{r}
+
+# Import data
+data <- read_excel("path/0-data/bd_clean.xlsx")
+```
+# Filter data
+```{r}
+# Select variables
+data <- data[,c("Vol_i", "VOL_TOT", "PEF", "DE")]
+
+# Filter out rows with NA values in any of the selected variables
+data <- data %>% filter(!is.na(Vol_i) & 
+                          !is.na(VOL_TOT) & 
+                          #!is.na(DMOVCARGA) & 
+                          #!is.na(Conc_100) & 
+                          !is.na(PEF) & 
+                          !is.na(DE) #& 
+                          #!is.na(Grupo)
+                        )
+```
+
+
+# Explicacion
+XGBoost o Extreme Gradient Boosting, es uno de los algoritmos de machine learning de tipo supervisado más usados en la actualidad.
+
+Este algoritmo se caracteriza por obtener buenos resultados de predicción con relativamente poco esfuerzo, en muchos casos equiparables o mejores que los devueltos por modelos más complejos computacionalmente, en particular para problemas con datos heterogéneos.
+
+# División de datos de entrenamiento y prueba
+```{r}
+# Lista en blanco
+datos <- list()
+
+# agregamos los datos a la lista
+datos$data <- data
+
+# Semilla
+set.seed(1)
+
+# División de datos de entrenamiento y testeo
+datos$train <- sample_frac(datos$data, size = 0.7)
+datos$test <- setdiff(datos$data, datos$train)
+
+# Tamaño del conjunto de datos
+dim(datos$train)
+dim(datos$test)
+
+```
+# Conversión de datos Dmatrix
+
+la implementación XGBoost de R requiere que los datos que usemos sean matrices, específicamente de tipo DMatrix, así que necesitamos convertir nuestros sets de entrenamiento y prueba a este tipo de estructura.
+
+# Matriz de entrenamiento
+```{r}
+datos$train_mat <- 
+  datos$train %>% 
+  select(-PEF) %>% 
+  as.matrix() %>% 
+  xgb.DMatrix(data = ., label = datos$train$PEF)
+```
+
+# Matriz de testeo
+```{r}
+datos$test_mat <- 
+  datos$test %>% 
+  select(-PEF) %>% 
+  as.matrix() %>% 
+  xgb.DMatrix(data = ., label = datos$test$PEF)
+
+datos$train_mat
+datos$test_mat
+```
+
+# Entrenamiento del modelo predictivo 
+Entrenamiento del modelo predictivo
+Para entrenar un modelo usamos la función xgboost().
+
+Tenemos a nuestra disposición una amplia cantidad de hiper parámetros para ajustar, pero para este ejemplo introductorio haremos ajustes solo a los siguientes:
+
+**objective**: El tipo de tarea de clasificación que realizaremos. Para clasificación binaria, nuestro caso, especificamos “binary:logistic”.
+**nround**: El número de iteraciones que se realizarán antes de detener el proceso de ajuste. Un mayor número de iteraciones generalmente devuelve mejores resultados de predicción pero necesita más tiempo de entrenamiento.
+**max.depth**: “Profundidad” o número de nodos de bifurcación de los árboles de de decisión usados en el entrenamiento. Aunque una mayor profundidad puede devolver mejores resultados, también puede resultar en overfitting (sobre ajuste).
+**eta**: La tasa de aprendizaje del modelo. Un mayor valor llega más rápidamente al mínimo de la función objetivo, es decir, a un “mejor modelo”, pero puede “pasarse” de su valor óptimo. En cambio, un valor pequeño puede nunca llegar al valor óptimo de la función objetivo, incluso después de muchas iteraciones. En ambos casos, esto afecta el desempeño de nuestros modelos con nuevos.
+**nthread**: El número de hilos computacionales que serán usados en el proceso de entrenamiento. Generalmente se refiere a los núcleos del procesador de tu equipo de cómputo, local o remoto, pero también pueden ser los núcleos de un GPU.
+Como los datos de nuestro ejemplo son sencillos, definiremos valores muy conservadores para todos estos hiper parámetros.
+
+Entrenamos el modelo y lo guardamos nuestro modelo en datos$modelo_01. Para datos más complejos, este proceso puede ser tardado.
+
+Por defecto, nos es mostrado el resultado de la función objetivo de cada iteración. De este modo podemos analizar el desempeño del modelo que hemos especificado.
+```{r}
+datos$modelo_01 <- xgboost(data = datos$train_mat, 
+                           objective = "reg:squarederror",
+                           nrounds = 1000, 
+                           max.depth = 2, 
+                           eta = 0.3, 
+                           nthread = 4)
+
+datos$modelo_01
+
+```
+
+# Generación de predicciones
+```{r}
+datos$predict_01 <- predict(datos$modelo_01, datos$test_mat)
+```
+# Prueba de modelos
+
+```{r}
+# Base de datos para graficar 
+data_plot <- data.frame(
+  datos$predict_01,
+  datos$test$PEF
+)
+
+# Nombrar las columnas
+colnames(data_plot) <- c("predict", "observed")
+
+# R2
+r2 <- summary(lm(data_plot$observed~data_plot$predict))$r.squared
+
+# Grafico de observado y predichos 
+ggplot(data_plot, aes(observed, predict))+
+  geom_point()+
+  xlab("Observados")+
+  ylab("Predichos")+
+  geom_smooth(formula = y ~ x, method = "lm", se = FALSE) +
+  geom_abline(intercept = 0, slope = 1) +
+  scale_x_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  scale_y_continuous(breaks = seq(0, 100, by = 10), limits = c(0, 100)) +
+  annotate(geom = 'text', label = paste("R² =", round(r2,2) ), x = 10, y = 100)+
+  theme_classic()
+
+
+```
+
+# Graficos
+
+
+```{r, warning=FALSE}
+theme_crojfe <- function(base_size = 10, base_family = "Tahoma") {
+  theme_classic(base_size = base_size, base_family = base_family) +
+    theme(
+      panel.border = element_rect(color = "#4D4D4D", fill = NA, linewidth = 0.4),
+      axis.line = element_line(color = "#4D4D4D", linewidth = 0.4),
+      axis.ticks = element_line(color = "#4D4D4D", linewidth = 0.4),
+      
+      # grid for CROJFE
+      panel.grid.major = element_line(color = "#B3B3B3", linewidth = 0.35),
+      panel.grid.minor = element_blank(),
+      
+      legend.position = "none",
+      
+      plot.title = element_text(hjust = 0.5, size = base_size),
+      axis.title = element_text(size = base_size),
+      axis.text  = element_text(size = base_size)
+    )
+}
+
+# Gráfico de dispersión comparando valores reales y predichos
+plot1_nn <- ggplot(data_plot, aes(y = observed, x = predict)) +
+  geom_point(shape = 21, fill = "#CFCFCF", color = "#4D4D4D", size = 2, stroke = 0.3) +
+  geom_smooth(method = "lm", formula = y ~ x, color = "#4D4D4D", linewidth = 0.6, se = FALSE) +
+  geom_abline(intercept = 0, slope = 1, color = "black", linewidth = 0.5) +
+  labs(
+    x = expression("Predicted productivity, m"^3*" h"^{-1}),
+    y = expression("Observed productivity, m"^3*" h"^{-1})
+  ) +
+  scale_x_continuous(breaks = seq(0, 120, 20), limits = c(0, 120)) +
+  scale_y_continuous(breaks = seq(0, 120, 20), limits = c(0, 120)) +
+  #coord_equal() +
+  theme_crojfe(base_size = 8, base_family = "Tahoma")
+
+lm_eq <- lm(observed ~ predict, data = data_plot)
+
+eq <- bquote(italic(y) == .(round(coef(lm_eq)[1], 2)) + .(round(coef(lm_eq)[2], 2)) %.% italic(x))
+r_squared <- bquote(R^2 == .(round(summary(lm_eq)$r.squared, 2)))
+sample_size <- bquote(italic(n) == .(nrow(data_plot)))
+
+plot_with_eq <- plot1_nn +
+  annotate("text", x = 50, y = 25, label = as.expression(eq), family = "Tahoma", size = 2.5, hjust = 0) +
+  annotate("text", x = 50, y = 17, label = as.expression(r_squared), family = "Tahoma", size = 2.5, hjust = 0) +
+  annotate("text", x = 50, y = 9,  label = as.expression(sample_size), family = "Tahoma", size = 2.5, hjust = 0)
+
+
+# Mostrar el gráfico con la ecuación, R² y el valor de 'n'
+print(plot_with_eq)
+
+```
+# grafico de densidad
+```{r}
+# Calcular los residuos
+residuos <- data_plot$observed - data_plot$predict
+
+plot2 <- ggplot(data.frame(residuos), aes(x = residuos)) +
+  geom_density(fill = "#CFCFCF", color = "black", linewidth = 0.5) +
+  labs(
+    x = "Residuals",
+    y = "Density"
+  ) +
+  theme_crojfe(base_size = 8, base_family = "Tahoma")
+residuos_df <- data.frame(PEF_observed = data_plot$observed, Residuos = residuos)
+
+```
+# Grafico de dispersion
+```{r}
+residuos_df <- data.frame(PEF_observed = data_plot$observed, Residuos = residuos)
+
+plot3 <- ggplot(residuos_df, aes(x = PEF_observed, y = Residuos)) +
+  geom_point(shape = 21, fill = "#CFCFCF", color = "#4D4D4D", size = 2, stroke = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.5) +
+  labs(
+    x = expression("Observed Productivity, m"^3*" h"^{-1}),
+    y = "Residuals"
+  ) +
+  theme_crojfe(base_size = 8, base_family = "Tahoma")
+
+```
+
+```{r, warning=FALSE}
+library(ggpubr)
+PLOT_XGBOOST <- ggarrange(
+  plot_with_eq, plot2, plot3,
+  labels = c("A", "B", "C"),
+  font.label = list(size = 8, face = "bold", family = "Tahoma"),
+  ncol = 3,
+  widths = c(1, 1, 1),   # <- fuerza mismo ancho
+  align = "hv"
+)
+PLOT_XGBOOST <- PLOT_XGBOOST + theme(text = element_text(size = 14))
+PLOT_XGBOOST
+
+
+ggsave("Fig5.png", PLOT_XGBOOST, width = 18, height = 9, units = "cm", dpi = 600)
+```
+
+
+
+```{r}
+fold_cv <- function(data,k){
+  
+  folds=cvTools::cvFolds(nrow(data),K=k)
+  invisible(folds)
+  
+}
+
+set.seed(123)
+
+fold<-datos$data%>%fold_cv(.,k=10)
+
+
+temporary<-datos$data%>%mutate(Fold=rep(0,nrow(datos$data)),
+                          holdoutpred=rep(0,nrow(datos$data)),
+                          MSE=rep(0,nrow(.)),
+                          RMSE=rep(0,nrow(.)),
+                          MAE=rep(0,nrow(.)),
+                          R2=rep(0,nrow(.)),
+                          AIC=rep(0,nrow(.)),
+                          BIC=rep(0,nrow(.)),
+                          COR=rep(0,nrow(.)))
+
+for(i in 1:10){
+  # set two set of data in train and validation ----
+  datos$train <-      datos$data[fold$subsets[fold$which != i], ]
+  datos$validation <- datos$data[fold$subsets[fold$which == i], ]
+  
+  # Matriz de entrenamiento
+  datos$train_mat <- 
+    datos$train %>% 
+    select(-PEF) %>% 
+    as.matrix() %>% 
+    xgb.DMatrix(data = ., label = datos$train$PEF)
+  
+  # Matriz de validacion
+  datos$test_mat <- 
+    datos$validation %>% 
+    select(-PEF) %>% 
+    as.matrix() %>% 
+    xgb.DMatrix(data = ., label = datos$validation$PEF)
+  
+  # define the model 
+  datos$modelo_01 <- xgboost(data = datos$train_mat, 
+                             objective = "reg:squarederror",
+                             nrounds = 1000, 
+                             max.depth = 2, 
+                             eta = 0.3, 
+                             nthread = 4)
+  
+  
+  
+  newpred = predict(datos$modelo_01, datos$test_mat)
+  
+  true=datos$validation$PEF
+  true
+  
+  error=(true-newpred)
+  error
+  
+  rmse=sqrt(mean(error^2))
+  rmse
+  
+  mse=mean((newpred-true)^2)
+  mse
+  
+  R2=1-(sum((true-newpred)^2)/sum((true-mean(true))^2))
+  R2
+  
+  mae=mean(abs(error))
+  mae
+  
+  COR = cor(newpred,datos$validation$PEF)
+  COR
+  
+
+  
+  temporary[fold$subsets[fold$which == i], ]$holdoutpred <- newpred
+  temporary[fold$subsets[fold$which == i], ]$RMSE=rmse
+  temporary[fold$subsets[fold$which == i], ]$MSE=mse
+  temporary[fold$subsets[fold$which == i], ]$MAE=mae
+  temporary[fold$subsets[fold$which == i], ]$R2=R2
+  #temporary[fold$subsets[fold$which == i], ]$AIC=AIC(newlm)
+  #temporary[fold$subsets[fold$which == i], ]$BIC=BIC(newlm)
+  temporary[fold$subsets[fold$which == i], ]$COR = COR
+  temporary[fold$subsets[fold$which == i], ]$Fold=i
+  
+}
+
+temporary <- temporary %>% pivot_longer( 
+  cols = c("RMSE", "R2", "COR", "MAE"),
+  names_to = "Metric",
+  values_to = "Value")
+
+temporary %>% ggplot(aes(x=Metric,y=Value,fill=Metric))+
+  geom_boxplot()+
+  coord_flip()+
+  facet_wrap(~Metric,ncol=1,scales="free")
+```
+
+# Graficos
+
+
+```{r}
+
+
+# Gráfico de dispersión comparando valores reales y predichos
+plot1 <- ggplot(resultados, aes(x = PEF_real, y = PEF_predicho)) +
+  geom_point() +
+  geom_smooth(method = "lm", formula = y ~ x, color = "#1F77B4", se = FALSE) +
+  geom_abline(intercept = 0, slope = 1, color = "black") + # Línea de referencia para una predicción perfecta
+  labs(x = "Productividad efectiva observada, m³/h",
+       y = "Productividad efectiva predicha, m³/h") +
+  theme_classic() +
+  xlim(0, 100) +
+  ylim(0, 100) +
+  scale_x_continuous(breaks = seq(0, 100, 10)) +
+  scale_y_continuous(breaks = seq(0, 100, 10))
+```
+
